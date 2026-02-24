@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const { createClient } = require('redis');
 const Joi = require('joi');
 const crypto = require('crypto');
+const basicAuth = require('express-basic-auth');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -189,6 +190,449 @@ async function getAllLobbies() {
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
+});
+
+// Admin Panel with Basic Auth
+const adminAuth = basicAuth({
+  users: { 
+    [process.env.ADMIN_USERNAME || 'admin']: process.env.ADMIN_PASSWORD || 'admin' 
+  },
+  challenge: true,
+  realm: 'NeoLobbyst Admin Panel'
+});
+
+// Admin dashboard HTML
+app.get('/admin', adminAuth, (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NeoLobbyst Admin Panel</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#3b82f6',
+            secondary: '#8b5cf6',
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-gray-900 text-gray-100">
+  <div class="min-h-screen">
+    <!-- Header -->
+    <header class="bg-gray-800 border-b border-gray-700">
+      <div class="container mx-auto px-4 py-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h1 class="text-2xl font-bold text-primary">NeoLobbyst</h1>
+            <p class="text-sm text-gray-400">Admin Panel</p>
+          </div>
+          <div class="flex items-center gap-4">
+            <div class="text-right">
+              <p class="text-sm text-gray-400">Logged in as</p>
+              <p class="font-semibold">${process.env.ADMIN_USERNAME || 'admin'}</p>
+            </div>
+            <button onclick="logout()" class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm font-medium transition">
+              Logout
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-4 py-8">
+      <!-- Stats Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-sm text-gray-400 mb-1">Active Lobbies</p>
+              <p class="text-3xl font-bold text-primary" id="activeLobbies">-</p>
+            </div>
+            <div class="w-12 h-12 bg-primary/20 rounded-lg flex items-center justify-center">
+              <svg class="w-6 h-6 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-sm text-gray-400 mb-1">Total Players</p>
+              <p class="text-3xl font-bold text-green-500" id="totalPlayers">-</p>
+            </div>
+            <div class="w-12 h-12 bg-green-500/20 rounded-lg flex items-center justify-center">
+              <svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-sm text-gray-400 mb-1">Redis Keys</p>
+              <p class="text-3xl font-bold text-purple-500" id="redisKeys">-</p>
+            </div>
+            <div class="w-12 h-12 bg-purple-500/20 rounded-lg flex items-center justify-center">
+              <svg class="w-6 h-6 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"></path>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-sm text-gray-400 mb-1">Server Status</p>
+              <p class="text-3xl font-bold text-green-500">●</p>
+              <p class="text-xs text-gray-400 mt-1">Online</p>
+            </div>
+            <div class="w-12 h-12 bg-green-500/20 rounded-lg flex items-center justify-center">
+              <svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"></path>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="bg-gray-800 rounded-lg p-6 border border-gray-700 mb-8">
+        <h2 class="text-xl font-bold mb-4">Admin Actions</h2>
+        <div class="flex flex-wrap gap-3">
+          <button onclick="refreshData()" class="px-4 py-2 bg-primary hover:bg-blue-600 rounded-lg font-medium transition flex items-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            Refresh Data
+          </button>
+          <button onclick="cleanupInactive()" class="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 rounded-lg font-medium transition flex items-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+            </svg>
+            Cleanup Inactive
+          </button>
+          <button onclick="clearAllLobbies()" class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg font-medium transition flex items-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+            </svg>
+            Clear All Lobbies
+          </button>
+        </div>
+      </div>
+
+      <!-- Lobbies Table -->
+      <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+        <div class="p-6 border-b border-gray-700">
+          <h2 class="text-xl font-bold">Active Lobbies</h2>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full">
+            <thead class="bg-gray-700/50">
+              <tr>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Lobby ID</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Host</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Region</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Players</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Password</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Version</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Last Heartbeat</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="lobbiesTable" class="divide-y divide-gray-700">
+              <tr>
+                <td colspan="8" class="px-6 py-8 text-center text-gray-400">
+                  <div class="flex flex-col items-center gap-2">
+                    <svg class="w-12 h-12 text-gray-600 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                    </svg>
+                    <p>Loading lobbies...</p>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    let autoRefresh = true;
+
+    async function fetchStats() {
+      try {
+        const response = await fetch('/admin/api/stats');
+        const data = await response.json();
+        
+        document.getElementById('activeLobbies').textContent = data.activeLobbies;
+        document.getElementById('totalPlayers').textContent = data.totalPlayers;
+        document.getElementById('redisKeys').textContent = data.redisKeys;
+      } catch (error) {
+        console.error('Error fetching stats:', error);
+      }
+    }
+
+    async function fetchLobbies() {
+      try {
+        const response = await fetch('/admin/api/lobbies');
+        const data = await response.json();
+        
+        const tbody = document.getElementById('lobbiesTable');
+        
+        if (data.lobbies.length === 0) {
+          tbody.innerHTML = \`
+            <tr>
+              <td colspan="8" class="px-6 py-8 text-center text-gray-400">
+                <div class="flex flex-col items-center gap-2">
+                  <svg class="w-12 h-12 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
+                  </svg>
+                  <p>No active lobbies</p>
+                </div>
+              </td>
+            </tr>
+          \`;
+          return;
+        }
+        
+        tbody.innerHTML = data.lobbies.map(lobby => {
+          const lastHeartbeat = new Date(lobby.lastHeartbeat);
+          const timeSince = Math.floor((Date.now() - lobby.lastHeartbeat) / 1000);
+          const timeStr = timeSince < 60 ? \`\${timeSince}s ago\` : \`\${Math.floor(timeSince / 60)}m ago\`;
+          
+          return \`
+            <tr class="hover:bg-gray-700/50 transition">
+              <td class="px-6 py-4 whitespace-nowrap">
+                <span class="font-mono text-sm text-primary">\${lobby.lobbyId}</span>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap">
+                <span class="font-medium">\${lobby.hostName}</span>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap">
+                <span class="px-2 py-1 text-xs font-medium bg-blue-500/20 text-blue-400 rounded">\${lobby.region}</span>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap">
+                <span class="font-medium">\${lobby.playerCount}/\${lobby.maxPlayers}</span>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap">
+                \${lobby.hasPassword 
+                  ? '<span class="px-2 py-1 text-xs font-medium bg-yellow-500/20 text-yellow-400 rounded">Yes</span>'
+                  : '<span class="px-2 py-1 text-xs font-medium bg-gray-600 text-gray-400 rounded">No</span>'
+                }
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap">
+                <span class="text-sm text-gray-400">\${lobby.version}</span>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap">
+                <span class="text-sm text-gray-400">\${timeStr}</span>
+              </td>
+              <td class="px-6 py-4 whitespace-nowrap">
+                <button onclick="deleteLobby('\${lobby.lobbyId}')" class="text-red-400 hover:text-red-300 transition">
+                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                  </svg>
+                </button>
+              </td>
+            </tr>
+          \`;
+        }).join('');
+      } catch (error) {
+        console.error('Error fetching lobbies:', error);
+      }
+    }
+
+    async function refreshData() {
+      await Promise.all([fetchStats(), fetchLobbies()]);
+    }
+
+    async function deleteLobby(lobbyId) {
+      if (!confirm(\`Delete lobby \${lobbyId}?\`)) return;
+      
+      try {
+        const response = await fetch(\`/admin/api/lobbies/\${lobbyId}\`, {
+          method: 'DELETE'
+        });
+        
+        if (response.ok) {
+          await refreshData();
+        } else {
+          alert('Failed to delete lobby');
+        }
+      } catch (error) {
+        console.error('Error deleting lobby:', error);
+        alert('Error deleting lobby');
+      }
+    }
+
+    async function cleanupInactive() {
+      if (!confirm('Cleanup all inactive lobbies?')) return;
+      
+      try {
+        const response = await fetch('/admin/api/cleanup', {
+          method: 'POST'
+        });
+        
+        const data = await response.json();
+        alert(\`Cleaned up \${data.removed} inactive lobbies\`);
+        await refreshData();
+      } catch (error) {
+        console.error('Error cleaning up:', error);
+        alert('Error cleaning up lobbies');
+      }
+    }
+
+    async function clearAllLobbies() {
+      if (!confirm('⚠️ WARNING: This will delete ALL lobbies! Are you sure?')) return;
+      if (!confirm('This action cannot be undone. Continue?')) return;
+      
+      try {
+        const response = await fetch('/admin/api/lobbies/all', {
+          method: 'DELETE'
+        });
+        
+        const data = await response.json();
+        alert(\`Deleted \${data.removed} lobbies\`);
+        await refreshData();
+      } catch (error) {
+        console.error('Error clearing lobbies:', error);
+        alert('Error clearing lobbies');
+      }
+    }
+
+    function logout() {
+      // Basic Auth logout trick
+      fetch('/admin', {
+        headers: {
+          'Authorization': 'Basic ' + btoa('logout:logout')
+        }
+      }).then(() => {
+        window.location.href = '/';
+      });
+    }
+
+    // Initial load
+    refreshData();
+
+    // Auto-refresh every 5 seconds
+    setInterval(() => {
+      if (autoRefresh) {
+        refreshData();
+      }
+    }, 5000);
+  </script>
+</body>
+</html>
+  `);
+});
+
+// Admin API endpoints
+app.get('/admin/api/stats', adminAuth, async (req, res) => {
+  try {
+    const lobbyIds = await redisClient.sMembers('lobbies:active');
+    let totalPlayers = 0;
+    
+    for (const lobbyId of lobbyIds) {
+      const lobby = await getLobby(lobbyId);
+      if (lobby) {
+        totalPlayers += lobby.playerCount || 0;
+      }
+    }
+    
+    const keys = await redisClient.keys('*');
+    
+    res.json({
+      activeLobbies: lobbyIds.length,
+      totalPlayers,
+      redisKeys: keys.length
+    });
+  } catch (error) {
+    console.error('Error fetching stats:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/admin/api/lobbies', adminAuth, async (req, res) => {
+  try {
+    const lobbyIds = await redisClient.sMembers('lobbies:active');
+    const lobbies = [];
+    
+    for (const lobbyId of lobbyIds) {
+      const lobby = await getLobby(lobbyId);
+      if (lobby) {
+        // Include password status but not the actual password
+        const { password, ...lobbyData } = lobby;
+        lobbies.push(lobbyData);
+      }
+    }
+    
+    res.json({ lobbies });
+  } catch (error) {
+    console.error('Error fetching lobbies:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.delete('/admin/api/lobbies/:lobbyId', adminAuth, async (req, res) => {
+  try {
+    const { lobbyId } = req.params;
+    await deleteLobby(lobbyId);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Error deleting lobby:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/admin/api/cleanup', adminAuth, async (req, res) => {
+  try {
+    const lobbyIds = await redisClient.sMembers('lobbies:active');
+    const now = Date.now();
+    const timeout = parseInt(process.env.LOBBY_MAX_INACTIVE_MS) || 60000;
+    let removed = 0;
+    
+    for (const lobbyId of lobbyIds) {
+      const lobby = await getLobby(lobbyId);
+      if (lobby && (now - lobby.lastHeartbeat) > timeout) {
+        await deleteLobby(lobbyId);
+        removed++;
+      }
+    }
+    
+    res.json({ ok: true, removed });
+  } catch (error) {
+    console.error('Error cleaning up:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.delete('/admin/api/lobbies/all', adminAuth, async (req, res) => {
+  try {
+    const lobbyIds = await redisClient.sMembers('lobbies:active');
+    
+    for (const lobbyId of lobbyIds) {
+      await deleteLobby(lobbyId);
+    }
+    
+    res.json({ ok: true, removed: lobbyIds.length });
+  } catch (error) {
+    console.error('Error clearing lobbies:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // Get API key (for initial client setup)
