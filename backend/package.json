@@ -11,7 +11,8 @@
     "joi": "^17.11.0",
     "cors": "^2.8.5",
     "uuid": "^9.0.1",
-    "serverless-http": "^3.2.0"
+    "serverless-http": "^3.2.0",
+    "express-basic-auth": "^1.2.1"
   },
   "scripts": {
     "start": "node server.js",
