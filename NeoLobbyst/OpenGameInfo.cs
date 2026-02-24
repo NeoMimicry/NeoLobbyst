@@ -15,6 +15,7 @@ namespace NeoLobbyst
         public bool IsPasswordProtected { get; set; }
         public bool IsPublic { get; set; }
         public string Version { get; set; } = string.Empty;
+        public string Source { get; set; } = "steam";
     }
 }
 

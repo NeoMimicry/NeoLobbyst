@@ -19,7 +19,7 @@ namespace NeoLobbyst
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
-            TestingGUI.Instance();
+            //TestingGUI.Instance();
         }
     }
 }

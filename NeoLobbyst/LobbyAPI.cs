@@ -1,3 +1,6 @@
+using MelonLoader;
+using MelonLoader.Utils;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -5,51 +8,74 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Threading.Tasks;
-using MelonLoader;
-using Newtonsoft.Json;
 
 namespace NeoLobbyst
 {
     public static class LobbyAPI
     {
         private static readonly HttpClient Client = new HttpClient();
-        private const string BaseUrl = "https://wzrd-was-not.here";
+        private const string BaseUrl = "http://localhost:3000";
         private const string BaseUrlLocal = "http://localhost:3000";
         
         private static string _apiKey;
         private static string _clientId;
-        private static readonly string CredentialsPath = Path.Combine(MelonUtils.UserDataDirectory, "neolobbyst_credentials.json");
+        private static bool _initialized;
+        private static readonly object InitLock = new object();
+        private static readonly string CredentialsPath = Path.Combine(MelonEnvironment.UserDataDirectory, "neolobbyst_credentials.json");
 
         static LobbyAPI()
         {
-            LoadOrCreateCredentials();
+            Client.Timeout = TimeSpan.FromSeconds(10);
         }
 
-        private static void LoadOrCreateCredentials()
+        private static void Initialized()
         {
-            try
+            if (_initialized) return;
+            
+            lock (InitLock)
             {
-                if (File.Exists(CredentialsPath))
+                if (_initialized) return;
+                
+                try
                 {
-                    string json = File.ReadAllText(CredentialsPath);
-                    var creds = JsonConvert.DeserializeObject<Credentials>(json);
-                    _apiKey = creds?.ApiKey;
-                    _clientId = creds?.ClientId;
-                    
-                    if (!string.IsNullOrEmpty(_apiKey))
+                    if (File.Exists(CredentialsPath))
                     {
-                        MelonLogger.Msg("Loaded existing API credentials");
-                        return;
+                        string json = File.ReadAllText(CredentialsPath);
+                        var creds = JsonConvert.DeserializeObject<Credentials>(json);
+                        _apiKey = creds?.ApiKey;
+                        _clientId = creds?.ClientId;
+                        
+                        if (!string.IsNullOrEmpty(_apiKey))
+                        {
+                            MelonLogger.Msg("Loaded existing API credentials");
+                            _initialized = true;
+                            return;
+                        }
                     }
+                    
+                    MelonLogger.Msg("No credentials found, will register on first API call");
+                }
+                catch (Exception ex)
+                {
+                    MelonLogger.Error($"Failed to load credentials: {ex.Message}");
                 }
                 
-                // Register new client
-                RegisterClientAsync().Wait();
+                _initialized = true;
             }
-            catch (Exception ex)
-            {
-                MelonLogger.Error($"Failed to load/create credentials: {ex.Message}");
+        }
+
+        private static async Task RegisteredAsync()
+        {
+            Initialized();
+            
+            if (!string.IsNullOrEmpty(_apiKey)) return;
+            
+            lock (InitLock)
+            { 
+                if (!string.IsNullOrEmpty(_apiKey)) return;
             }
+            
+            await RegisterClientAsync().ConfigureAwait(false);
         }
 
         private static async Task RegisterClientAsync()
@@ -59,7 +85,7 @@ namespace NeoLobbyst
                 MelonLogger.Msg("Registering new client with server...");
                 string url = BaseUrl + "/api/auth/register";
                 
-                using HttpResponseMessage response = await Client.PostAsync(url, null).ConfigureAwait(false);
+                using var response = await Client.PostAsync(url, new StringContent("", Encoding.UTF8, "application/json")).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
                 
                 string json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
@@ -86,7 +112,6 @@ namespace NeoLobbyst
             catch (Exception ex)
             {
                 MelonLogger.Error($"Failed to register client: {ex.Message}");
-                throw;
             }
         }
 
@@ -100,6 +125,7 @@ namespace NeoLobbyst
 
         public static async Task RegisterLobbyAsync(OpenGameInfo lobby, string password)
         {
+            await RegisteredAsync().ConfigureAwait(false);
             var body = new
             {
                 lobbyId = lobby.LobbyId,
@@ -134,6 +160,7 @@ namespace NeoLobbyst
 
         public static async Task SendHeartbeatAsync(string lobbyId, int playerCount)
         {
+            await RegisteredAsync().ConfigureAwait(false);
             var body = new
             {
                 playerCount
@@ -155,6 +182,7 @@ namespace NeoLobbyst
 
         public static async Task RemoveLobbyAsync(string lobbyId)
         {
+            await RegisteredAsync().ConfigureAwait(false);
             var request = new HttpRequestMessage(HttpMethod.Delete, BaseUrl + "/api/lobbies/" + lobbyId);
             AddAuthHeaders(request);
             
@@ -164,6 +192,7 @@ namespace NeoLobbyst
 
         public static async Task<IReadOnlyList<OpenGameInfo>> GetLobbiesAsync()
         {
+            await RegisteredAsync().ConfigureAwait(false);
             var request = new HttpRequestMessage(HttpMethod.Get, BaseUrl + "/api/lobbies");
             AddAuthHeaders(request);
             
@@ -177,6 +206,7 @@ namespace NeoLobbyst
 
         public static async Task<bool> CheckPasswordAsync(string lobbyId, string password)
         {
+            await RegisteredAsync().ConfigureAwait(false);
             var body = new
             {
                 password
