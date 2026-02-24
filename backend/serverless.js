@@ -1,31 +1,68 @@
-require('dotenv').config();
+// Serverless версия для Vercel/Netlify/Cloudflare
+// Использует Upstash Redis (serverless-friendly)
+
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
-const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
-const { createClient } = require('redis');
 const Joi = require('joi');
 const crypto = require('crypto');
 
 const app = express();
-const port = process.env.PORT || 3000;
 
-// Redis client
-let redisClient;
-(async () => {
-  redisClient = createClient({
-    socket: {
-      host: process.env.REDIS_HOST || 'localhost',
-      port: process.env.REDIS_PORT || 6379
-    },
-    password: process.env.REDIS_PASSWORD || undefined
-  });
+// Upstash Redis REST API (работает в serverless)
+const UPSTASH_REDIS_REST_URL = process.env.UPSTASH_REDIS_REST_URL;
+const UPSTASH_REDIS_REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+// Redis client через REST API
+const redis = {
+  async set(key, value, options = {}) {
+    const commands = ['SET', key, value];
+    if (options.EX) commands.push('EX', options.EX);
+    
+    const response = await fetch(`${UPSTASH_REDIS_REST_URL}/${commands.join('/')}`, {
+      headers: { Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}` }
+    });
+    return response.json();
+  },
   
-  redisClient.on('error', (err) => console.error('Redis Client Error', err));
-  await redisClient.connect();
-  console.log('Connected to Redis');
-})();
+  async get(key) {
+    const response = await fetch(`${UPSTASH_REDIS_REST_URL}/GET/${key}`, {
+      headers: { Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}` }
+    });
+    const data = await response.json();
+    return data.result;
+  },
+  
+  async del(key) {
+    const response = await fetch(`${UPSTASH_REDIS_REST_URL}/DEL/${key}`, {
+      headers: { Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}` }
+    });
+    return response.json();
+  },
+  
+  async sAdd(key, member) {
+    const response = await fetch(`${UPSTASH_REDIS_REST_URL}/SADD/${key}/${member}`, {
+      headers: { Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}` }
+    });
+    return response.json();
+  },
+  
+  async sRem(key, member) {
+    const response = await fetch(`${UPSTASH_REDIS_REST_URL}/SREM/${key}/${member}`, {
+      headers: { Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}` }
+    });
+    return response.json();
+  },
+  
+  async sMembers(key) {
+    const response = await fetch(`${UPSTASH_REDIS_REST_URL}/SMEMBERS/${key}`, {
+      headers: { Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}` }
+    });
+    const data = await response.json();
+    return data.result || [];
+  }
+};
 
 // Security middleware
 app.use(helmet());
@@ -36,19 +73,34 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '10kb' }));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60000,
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
-  message: { error: 'Too many requests, please try again later' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use(limiter);
+// Simple in-memory rate limiting (per deployment)
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const RATE_LIMIT_MAX = 100;
 
-// Logging middleware
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const userLimit = rateLimitMap.get(ip) || { count: 0, resetTime: now + RATE_LIMIT_WINDOW };
+  
+  if (now > userLimit.resetTime) {
+    userLimit.count = 0;
+    userLimit.resetTime = now + RATE_LIMIT_WINDOW;
+  }
+  
+  userLimit.count++;
+  rateLimitMap.set(ip, userLimit);
+  
+  return userLimit.count <= RATE_LIMIT_MAX;
+}
+
+// Rate limiting middleware
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} - IP: ${req.ip}`);
+  const ip = req.headers['x-forwarded-for'] || req.ip;
+  
+  if (!checkRateLimit(ip)) {
+    return res.status(429).json({ error: 'Too many requests, please try again later' });
+  }
+  
   next();
 });
 
@@ -73,7 +125,7 @@ const schemas = {
   })
 };
 
-// Generate API key for client
+// Generate API key
 function generateApiKey(clientId) {
   const secret = process.env.API_KEY_SECRET;
   const timestamp = Date.now();
@@ -128,63 +180,48 @@ function generateToken(clientId) {
   );
 }
 
-// Verify JWT token
-function verifyToken(token) {
-  try {
-    return jwt.verify(token, process.env.JWT_SECRET);
-  } catch (err) {
-    return null;
-  }
-}
-
-// Helper functions for Redis
+// Helper functions
 async function saveLobby(lobbyId, lobbyData) {
   const key = `lobby:${lobbyId}`;
-  await redisClient.set(key, JSON.stringify(lobbyData), {
-    EX: 300 // 5 minutes TTL
-  });
-  await redisClient.sAdd('lobbies:active', lobbyId);
+  await redis.set(key, JSON.stringify(lobbyData), { EX: 300 }); // 5 min TTL
+  await redis.sAdd('lobbies:active', lobbyId);
 }
 
 async function getLobby(lobbyId) {
   const key = `lobby:${lobbyId}`;
-  const data = await redisClient.get(key);
+  const data = await redis.get(key);
   return data ? JSON.parse(data) : null;
 }
 
 async function deleteLobby(lobbyId) {
   const key = `lobby:${lobbyId}`;
-  await redisClient.del(key);
-  await redisClient.sRem('lobbies:active', lobbyId);
+  await redis.del(key);
+  await redis.sRem('lobbies:active', lobbyId);
 }
 
 async function getAllLobbies() {
-  const lobbyIds = await redisClient.sMembers('lobbies:active');
+  const lobbyIds = await redis.sMembers('lobbies:active');
   const lobbies = [];
   
   for (const lobbyId of lobbyIds) {
     const lobby = await getLobby(lobbyId);
     if (lobby) {
-      // Don't expose password
       const { password, ...publicLobby } = lobby;
       lobbies.push(publicLobby);
     } else {
-      // Clean up stale reference
-      await redisClient.sRem('lobbies:active', lobbyId);
+      await redis.sRem('lobbies:active', lobbyId);
     }
   }
   
   return lobbies;
 }
 
-// API Routes
+// Routes
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
 });
 
-// Get API key (for initial client setup)
 app.post('/api/auth/register', (req, res) => {
   const clientId = crypto.randomUUID();
   const apiKey = generateApiKey(clientId);
@@ -198,7 +235,6 @@ app.post('/api/auth/register', (req, res) => {
   });
 });
 
-// Register new lobby
 app.post('/api/lobbies', authenticate, async (req, res) => {
   try {
     const { error, value } = schemas.registerLobby.validate(req.body);
@@ -208,7 +244,6 @@ app.post('/api/lobbies', authenticate, async (req, res) => {
     
     const { lobbyId, hostName, region, maxPlayers, hasPassword, version, password } = value;
     
-    // Check if lobby already exists
     const existing = await getLobby(lobbyId);
     if (existing) {
       return res.status(409).json({ error: 'Lobby already exists' });
@@ -237,7 +272,6 @@ app.post('/api/lobbies', authenticate, async (req, res) => {
   }
 });
 
-// Send heartbeat
 app.post('/api/lobbies/:lobbyId/heartbeat', authenticate, async (req, res) => {
   try {
     const { lobbyId } = req.params;
@@ -252,7 +286,6 @@ app.post('/api/lobbies/:lobbyId/heartbeat', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Lobby not found' });
     }
     
-    // Verify ownership
     if (lobby.clientId !== req.clientId) {
       return res.status(403).json({ error: 'Not authorized to update this lobby' });
     }
@@ -269,7 +302,6 @@ app.post('/api/lobbies/:lobbyId/heartbeat', authenticate, async (req, res) => {
   }
 });
 
-// Delete lobby
 app.delete('/api/lobbies/:lobbyId', authenticate, async (req, res) => {
   try {
     const { lobbyId } = req.params;
@@ -279,7 +311,6 @@ app.delete('/api/lobbies/:lobbyId', authenticate, async (req, res) => {
       return res.status(404).json({ error: 'Lobby not found' });
     }
     
-    // Verify ownership
     if (lobby.clientId !== req.clientId) {
       return res.status(403).json({ error: 'Not authorized to delete this lobby' });
     }
@@ -293,7 +324,6 @@ app.delete('/api/lobbies/:lobbyId', authenticate, async (req, res) => {
   }
 });
 
-// Get all lobbies
 app.get('/api/lobbies', authenticate, async (req, res) => {
   try {
     const lobbies = await getAllLobbies();
@@ -304,7 +334,6 @@ app.get('/api/lobbies', authenticate, async (req, res) => {
   }
 });
 
-// Check password
 app.post('/api/lobbies/:lobbyId/check-password', authenticate, async (req, res) => {
   try {
     const { lobbyId } = req.params;
@@ -328,39 +357,11 @@ app.post('/api/lobbies/:lobbyId/check-password', authenticate, async (req, res) 
   }
 });
 
-// Cleanup inactive lobbies
-setInterval(async () => {
-  try {
-    const lobbyIds = await redisClient.sMembers('lobbies:active');
-    const now = Date.now();
-    const timeout = parseInt(process.env.LOBBY_MAX_INACTIVE_MS) || 60000;
-    
-    for (const lobbyId of lobbyIds) {
-      const lobby = await getLobby(lobbyId);
-      if (lobby && (now - lobby.lastHeartbeat) > timeout) {
-        console.log(`Cleaning up inactive lobby: ${lobbyId}`);
-        await deleteLobby(lobbyId);
-      }
-    }
-  } catch (err) {
-    console.error('Error in cleanup task:', err);
-  }
-}, 30000); // Run every 30 seconds
-
 // Error handling
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, closing server...');
-  await redisClient.quit();
-  process.exit(0);
-});
-
-app.listen(port, () => {
-  console.log(`NeoLobbyst server running on port ${port}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+// Export for serverless
+module.exports = app;
