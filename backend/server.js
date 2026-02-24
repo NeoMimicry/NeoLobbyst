@@ -11,6 +11,9 @@ const crypto = require('crypto');
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Trust proxy - required when behind Cloudflare/Nginx
+app.set('trust proxy', true);
+
 // Redis client
 let redisClient;
 (async () => {
