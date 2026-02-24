@@ -14,12 +14,10 @@ const port = process.env.PORT || 3000;
 // Redis client
 let redisClient;
 (async () => {
+  const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+  
   redisClient = createClient({
-    socket: {
-      host: process.env.REDIS_HOST || 'localhost',
-      port: process.env.REDIS_PORT || 6379
-    },
-    password: process.env.REDIS_PASSWORD || undefined
+    url: redisUrl
   });
   
   redisClient.on('error', (err) => console.error('Redis Client Error', err));
