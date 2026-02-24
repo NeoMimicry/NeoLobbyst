@@ -44,12 +44,18 @@ const limiter = rateLimit({
   message: { error: 'Too many requests, please try again later' },
   standardHeaders: true,
   legacyHeaders: false,
+  // Use Cloudflare's CF-Connecting-IP header for real user IP
+  keyGenerator: (req) => {
+    return req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip;
+  }
 });
 app.use(limiter);
 
 // Logging middleware
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} - IP: ${req.ip}`);
+  // Get real IP from Cloudflare or X-Forwarded-For
+  const ip = req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip;
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} - IP: ${ip}`);
   next();
 });
 
